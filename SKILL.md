@@ -40,9 +40,17 @@ table, and five fields by stable IDs. Resolve current field names from those IDs
 at runtime because the record API uses names at its boundary. Never use a
 display name as configuration or as a field identity.
 
-Use exported/browser snapshots for reads unless exact reconciliation requires
-API-only evidence. Use the existing batch-update API for approved mutations;
-on a provider limit, use only the shared policy's exact import/browser fallback.
+Select the execution route before reconciliation. For the v2 route, read
+[references/lark-config.md](references/lark-config.md#v2-selected-runtime) and use
+the composition runtime's injected selected Provider. Missing selection stops
+that route; environment credentials or browser/import operations are not an
+automatic fallback. Local synthetic completion does not authorize activation.
+
+For the retained v1 route only, use exported/browser snapshots for reads unless
+exact reconciliation requires API-only evidence. Use its batch-update API for
+approved mutations; on a provider limit, use only the shared policy's exact
+import/browser fallback. Keep the existing v1 deployment and rollback evidence
+until the replacement passes its operational cutover gates.
 
 ## Authorization
 
@@ -57,15 +65,23 @@ field outside diamonds, effective live days, and live minutes.
 
 1. Validate the normalized snapshot, month, row count, non-negative integers,
    and normalized account-key uniqueness.
-2. Run `scripts/lark_activity_sync.mjs` without `--apply`.
+2. Run a dry run through the selected execution route. In v2, use the
+   composition runner with explicit `mode: "dry-run"`; the current script
+   requires injected `providerFactory` and `providerInput`, so invoking it as a
+   standalone CLI does not supply a usable Provider. In the retained v1
+   deployment, run its script without `--apply`.
 3. Confirm every source account matches exactly one existing record in the
    target month. Leave destination-only accounts unchanged; do not fill them
    with zero.
 4. Report the exact three-field diff. Stop if any account is missing or
    ambiguous, any configured field ID is missing, or any metric destination is
    not numeric.
-5. If the user authorized an update, rerun the same snapshot and configuration
-   with `--apply`.
+5. If the user authorized the update and the reviewed scope still matches,
+   use the same snapshot, destination and selected actor with v2 `mode: "apply"`
+   and an explicit reviewed write selection; use `--apply` only in the retained
+   v1 deployment. Reconcile changed inputs, actor, targets or counts before
+   applying; previous approval does not cover a changed scope. The v2 runner
+   does not itself capture user approval or consume a prior dry-run hash.
 6. The script rereads fields and records after the write. Treat the run as
    successful only when all three metrics equal the requested values.
 
@@ -75,7 +91,13 @@ rerun a read-only check first.
 
 ## Credentials
 
-Use `LARK_TENANT_ACCESS_TOKEN`, or the pair `LARK_APP_ID` and
+For v2, the private runtime supplies explicit selected transport factories and
+an owner-only profile bundle; it must prove the selected actor and access under
+the Provider contract. Do not place credentials in the bundle or infer a
+Principal from ambient environment settings.
+
+For the retained v1 deployment only, use `LARK_TENANT_ACCESS_TOKEN`, or the pair
+`LARK_APP_ID` and
 `LARK_APP_SECRET`. A macOS keychain item may be selected with
 `LARK_KEYCHAIN_SERVICE`; its account is the app ID and its password is the app
 secret. Never place credential values in input JSON, configuration, logs, or Git.

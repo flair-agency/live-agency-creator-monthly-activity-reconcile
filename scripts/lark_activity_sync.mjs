@@ -1,17 +1,15 @@
 #!/usr/bin/env node
 
-import { isMainModule } from "../../_shared/is-main.mjs";
+import { isMainModule } from "@flair-agency/cli-utils/is-main";
 
 import { readFile } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 
-import { validateActivitySnapshot } from "@live-agency-skills/source-provider-api";
-import { readPrivateJson } from "@live-agency-skills/private-runtime-files";
+import { validateActivitySnapshot } from "@flair-agency/source-provider-api";
+import { readPrivateJson } from "@flair-agency/private-runtime-files";
 
-const DEFAULT_API_ORIGIN = "https://open.larksuite.com";
 const MAX_BATCH_SIZE = 200;
-const SECURITY_BIN = "/usr/bin/security";
+const SELECTED_PROVIDER_VERSION = "creator-activity-selected-provider/v1";
 
 export class SyncError extends Error {
   constructor(message, exitCode = 2, report = null) {
@@ -19,13 +17,6 @@ export class SyncError extends Error {
     this.name = "SyncError";
     this.exitCode = exitCode;
     this.report = report;
-  }
-}
-
-export class ApiError extends SyncError {
-  constructor(message) {
-    super(message, 3);
-    this.name = "ApiError";
   }
 }
 
@@ -103,6 +94,9 @@ export async function loadConfig(filePath) {
   } catch (error) {
     throw new SyncError(`cannot read Lark configuration: ${error.message}`);
   }
+  if (Object.keys(config).some((key) => !["appToken", "tableId", "fieldIds"].includes(key))) {
+    throw new SyncError("Lark configuration may contain only immutable Base, table, and field IDs");
+  }
   for (const key of ["appToken", "tableId"]) {
     if (typeof config[key] !== "string" || !config[key].trim()) {
       throw new SyncError(`Lark configuration ${key} is required`);
@@ -127,10 +121,6 @@ export async function loadConfig(filePath) {
     appToken: config.appToken,
     tableId: config.tableId,
     fieldIds: Object.fromEntries(keys.map((key, index) => [key, values[index]])),
-    credentials: typeof config.credentials?.larkKeychainService === "string" && config.credentials.larkKeychainService.trim()
-      ? { larkKeychainService: config.credentials.larkKeychainService.trim() }
-      : {},
-    apiOrigin: config.apiOrigin ?? DEFAULT_API_ORIGIN,
   };
 }
 
@@ -321,173 +311,42 @@ function report(snapshot, plan, mode, verified = false) {
   };
 }
 
-function parseCredentialPayload(payload) {
+function selectedProvider(providerFactory, providerInput, config) {
+  if (typeof providerFactory !== "function") {
+    throw new SyncError("an injected Lark Base selected-provider factory is required");
+  }
+  let provider;
   try {
-    const parsed = JSON.parse(payload);
-    if (parsed && parsed.app_id && parsed.app_secret) return [parsed.app_id, parsed.app_secret];
-  } catch {}
-  const values = Object.fromEntries(
-    payload
-      .split(/\r?\n/)
-      .filter((line) => line.includes("="))
-      .map((line) => {
-        const index = line.indexOf("=");
-        return [line.slice(0, index).trim().toUpperCase(), line.slice(index + 1).trim()];
-      }),
-  );
-  if (values.APP_ID && values.APP_SECRET) return [values.APP_ID, values.APP_SECRET];
-  if (values.LARK_APP_ID && values.LARK_APP_SECRET) {
-    return [values.LARK_APP_ID, values.LARK_APP_SECRET];
+    provider = providerFactory(providerInput);
+  } catch (error) {
+    throw new SyncError(`selected Lark Base Provider rejected the binding: ${error.message}`);
   }
-  return null;
+  const binding = provider?.fieldTableBinding;
+  if (provider?.contractVersion !== SELECTED_PROVIDER_VERSION
+      || !["user", "tenant"].includes(provider.tokenType)
+      || typeof provider.organizationProfileId !== "string"
+      || typeof provider.principalProfileId !== "string"
+      || typeof provider.readSelectionBindingSha256 !== "string"
+      || typeof provider.listFields !== "function"
+      || typeof provider.searchRecords !== "function"
+      || typeof provider.batchUpdate !== "function"
+      || binding?.baseToken !== config.appToken
+      || binding?.tableId !== config.tableId
+      || JSON.stringify(binding?.fieldIds) !== JSON.stringify(config.fieldIds)
+      || typeof binding?.bindingSha256 !== "string") {
+    throw new SyncError("selected Lark Base Provider does not match the immutable destination binding");
+  }
+  return provider;
 }
 
-function keychainCredentials(service) {
-  const metadata = spawnSync(SECURITY_BIN, ["find-generic-password", "-s", service], {
-    encoding: "utf8",
-    timeout: 15_000,
-  });
-  if (metadata.status !== 0) throw new SyncError("cannot read the selected keychain item");
-  const password = spawnSync(SECURITY_BIN, ["find-generic-password", "-s", service, "-w"], {
-    encoding: "utf8",
-    timeout: 15_000,
-  });
-  if (password.status !== 0) throw new SyncError("cannot read the selected keychain password");
-  const embedded = parseCredentialPayload(password.stdout.trim());
-  if (embedded) return embedded;
-  const account = metadata.stdout.match(/"acct"<blob>="([^"]*)"/)?.[1]?.trim();
-  const secret = password.stdout.trim();
-  if (!account || !secret) throw new SyncError("the selected keychain item lacks app credentials");
-  return [account, secret];
-}
-
-export class LarkClient {
-  constructor(token, { origin = DEFAULT_API_ORIGIN, fetchImpl = fetch } = {}) {
-    this.token = token;
-    this.origin = origin.replace(/\/$/, "");
-    this.fetchImpl = fetchImpl;
+export async function runSync({ snapshot, config, apply = false, providerFactory, providerInput }) {
+  const provider = selectedProvider(providerFactory, providerInput, config);
+  if (apply && (provider.writeEnabled !== true || typeof provider.writeSelectionBindingSha256 !== "string")) {
+    throw new SyncError("apply requires a separately explicit reviewed batch-update operation contract");
   }
-
-  static async fromEnvironment({ origin = DEFAULT_API_ORIGIN, env = process.env, fetchImpl = fetch } = {}) {
-    if (env.LARK_TENANT_ACCESS_TOKEN?.trim()) {
-      return new LarkClient(env.LARK_TENANT_ACCESS_TOKEN.trim(), { origin, fetchImpl });
-    }
-    let appId = env.LARK_APP_ID?.trim();
-    let appSecret = env.LARK_APP_SECRET?.trim();
-    if (Boolean(appId) !== Boolean(appSecret)) {
-      throw new SyncError("LARK_APP_ID and LARK_APP_SECRET must be supplied together");
-    }
-    if (!appId) {
-      const service = env.LARK_KEYCHAIN_SERVICE?.trim();
-      if (!service) throw new SyncError("Lark credentials are not configured");
-      [appId, appSecret] = keychainCredentials(service);
-    }
-    const client = new LarkClient("", { origin, fetchImpl });
-    const response = await client.request("POST", "/open-apis/auth/v3/tenant_access_token/internal", {
-      payload: { app_id: appId, app_secret: appSecret },
-      authorization: false,
-      retry: true,
-    });
-    if (typeof response.tenant_access_token !== "string" || !response.tenant_access_token) {
-      throw new ApiError("tenant access token is missing from the authentication response");
-    }
-    return new LarkClient(response.tenant_access_token, { origin, fetchImpl });
-  }
-
-  async request(method, apiPath, { params = {}, payload, authorization = true, retry } = {}) {
-    const url = new URL(`${this.origin}${apiPath}`);
-    for (const [key, value] of Object.entries(params)) {
-      if (value !== null && value !== undefined && value !== "") url.searchParams.set(key, value);
-    }
-    const attempts = retry ?? method === "GET" ? 3 : 1;
-    let lastError;
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      try {
-        const headers = { "Content-Type": "application/json; charset=utf-8" };
-        if (authorization) headers.Authorization = `Bearer ${this.token}`;
-        const response = await this.fetchImpl(url, {
-          method,
-          headers,
-          body: payload === undefined ? undefined : JSON.stringify(payload),
-        });
-        const text = await response.text();
-        let decoded;
-        try {
-          decoded = text ? JSON.parse(text) : {};
-        } catch {
-          throw new ApiError("Lark API returned invalid JSON");
-        }
-        if (!response.ok) throw new ApiError(`Lark API HTTP ${response.status}`);
-        if (!decoded || typeof decoded !== "object" || decoded.code !== 0) {
-          throw new ApiError(`Lark API error code=${decoded?.code} msg=${decoded?.msg ?? ""}`);
-        }
-        return decoded;
-      } catch (error) {
-        lastError = error instanceof SyncError ? error : new ApiError(`Lark API request failed: ${error.message}`);
-        if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 250));
-      }
-    }
-    throw lastError;
-  }
-
-  async listFields(appToken, tableId) {
-    const result = [];
-    let pageToken;
-    do {
-      const response = await this.request(
-        "GET",
-        `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/fields`,
-        { params: { page_size: 100, page_token: pageToken } },
-      );
-      result.push(...(response.data?.items ?? []));
-      pageToken = response.data?.has_more ? response.data?.page_token : undefined;
-      if (response.data?.has_more && !pageToken) throw new ApiError("field page token is missing");
-    } while (pageToken);
-    return result;
-  }
-
-  async listRecords(appToken, tableId) {
-    const result = [];
-    let pageToken;
-    do {
-      const response = await this.request(
-        "GET",
-        `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records`,
-        { params: { page_size: 500, page_token: pageToken } },
-      );
-      result.push(...(response.data?.items ?? []));
-      pageToken = response.data?.has_more ? response.data?.page_token : undefined;
-      if (response.data?.has_more && !pageToken) throw new ApiError("record page token is missing");
-    } while (pageToken);
-    return result;
-  }
-
-  async batchUpdate(appToken, tableId, updates) {
-    if (updates.length > MAX_BATCH_SIZE) {
-      throw new ReconciliationError(`change count exceeds the safe batch limit: ${updates.length}`);
-    }
-    if (updates.length === 0) return;
-    await this.request(
-      "POST",
-      `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records/batch_update`,
-      { payload: { records: updates }, retry: false },
-    );
-  }
-}
-
-export async function runSync({ snapshot, config, apply = false, client }) {
-  const selectedService = process.env.LARK_KEYCHAIN_SERVICE?.trim()
-    || config.credentials?.larkKeychainService;
-  const credentialEnv = selectedService
-    ? { ...process.env, LARK_KEYCHAIN_SERVICE: selectedService }
-    : process.env;
-  const activeClient = client ?? (await LarkClient.fromEnvironment({
-    origin: config.apiOrigin,
-    env: credentialEnv,
-  }));
-  const bindings = resolveFields(await activeClient.listFields(config.appToken, config.tableId), config.fieldIds);
+  const bindings = resolveFields(await provider.listFields(), config.fieldIds);
   const plan = buildPlan(
-    await activeClient.listRecords(config.appToken, config.tableId),
+    await provider.searchRecords(),
     snapshot,
     bindings,
   );
@@ -499,26 +358,31 @@ export async function runSync({ snapshot, config, apply = false, client }) {
   if (plan.updates.length > MAX_BATCH_SIZE) {
     throw new ReconciliationError(`change count exceeds the safe batch limit: ${plan.updates.length}`);
   }
+  let uncertainWrite = false;
   try {
-    await activeClient.batchUpdate(config.appToken, config.tableId, plan.updates);
+    if (plan.updates.length > 0) await provider.batchUpdate(plan.updates, bindings);
   } catch (error) {
-    throw new VerificationError(
-      `write outcome is uncertain; do not retry before a read-only check: ${error.message}`,
-    );
+    if (error?.uncertainWrite !== true) throw error;
+    uncertainWrite = true;
   }
   const verifiedBindings = resolveFields(
-    await activeClient.listFields(config.appToken, config.tableId),
+    await provider.listFields(),
     config.fieldIds,
   );
   const verifiedPlan = buildPlan(
-    await activeClient.listRecords(config.appToken, config.tableId),
+    await provider.searchRecords(),
     snapshot,
     verifiedBindings,
   );
   if (verifiedPlan.errors.length || verifiedPlan.updates.length) {
-    throw new VerificationError("post-write reread does not match the requested metrics");
+    throw new VerificationError(uncertainWrite
+      ? "uncertain write readback does not prove the requested metrics; do not retry automatically"
+      : "post-write reread does not match the requested metrics");
   }
-  return report(snapshot, verifiedPlan, "apply", true);
+  return {
+    ...report(snapshot, verifiedPlan, "apply", true),
+    writeOutcome: uncertainWrite ? "reconciled-after-uncertain-response" : "confirmed",
+  };
 }
 
 export function parseArgs(argv) {
@@ -555,13 +419,13 @@ function printHuman(value) {
   for (const error of value.errors ?? []) console.error(`ERROR: ${error}`);
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), { providerFactory, providerInput } = {}) {
   let args;
   try {
     args = parseArgs(argv);
     const snapshot = await loadSnapshot(args.input, args.month);
     const config = await loadConfig(args.config);
-    const result = await runSync({ snapshot, config, apply: args.apply });
+    const result = await runSync({ snapshot, config, apply: args.apply, providerFactory, providerInput });
     if (args.json) console.log(JSON.stringify(result, null, 2));
     else printHuman(result);
     return 0;
