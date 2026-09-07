@@ -20,6 +20,7 @@ separately selected write binding. It submits at most one batch and reconciles a
 uncertain response by reading back without retrying. Runtime owns asynchronous
 request correlation and private persistence.
 
-Run `npm test` from this package after installing the parent development
-composition. Tests use synthetic data. The retained `scripts/` exports support
-migration parity tests; they are not the canonical consumer application API.
+Run `npm ci` and `npm test` in this independent repository. No concrete
+Provider installation is required. Version 2 removes legacy service and source
+discovery entry points. Migration callers use the explicitly retained Runtime
+compatibility exports; the canonical Skill exposes only neutral business APIs.

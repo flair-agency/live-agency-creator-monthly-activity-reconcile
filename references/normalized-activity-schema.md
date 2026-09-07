@@ -30,5 +30,5 @@ Rules:
 - `liveMinutes` is already normalized to minutes. Source-specific time parsing
   belongs to the provider.
 
-Provider provenance may be recorded separately for audit, but it is not a Lark
+Provider provenance may be recorded separately for audit, but it is not a
 business-field update and must not alter the schema above.

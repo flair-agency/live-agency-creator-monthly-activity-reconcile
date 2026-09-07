@@ -1,17 +1,14 @@
 {
   "name": "@flair-agency/creator-monthly-activity-reconcile",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "type": "module",
   "license": "MIT",
   "exports": {
     "./SKILL.md": "./SKILL.md",
-    "./scripts/lark_activity_sync": "./scripts/lark_activity_sync.mjs",
-    "./scripts/resolve_activity_source": "./scripts/resolve_activity_source.mjs",
     "./scripts/management_activity_input": "./scripts/management_activity_input.mjs",
     "./contracts": "./src/contracts.js",
     "./core": "./src/core.js",
-    "./application": "./src/application.js",
-    "./legacy-activity": "./scripts/lark_activity_sync.mjs"
+    "./application": "./src/application.js"
   },
   "files": [
     "SKILL.md",
@@ -22,11 +19,7 @@
     "src"
   ],
   "dependencies": {
-    "@flair-agency/cli-utils": "0.1.0",
-    "@flair-agency/provider-protocol": "1.0.0",
-    "@flair-agency/private-files": "1.0.0",
-    "@flair-agency/lark-base-provider": "1.1.0",
-    "@flair-agency/backstage-provider": "1.3.0"
+    "@flair-agency/contracts": "1.0.0"
   },
   "scripts": {
     "test": "node --test"
@@ -37,5 +30,8 @@
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
+  },
+  "liveAgencyContracts": {
+    "monthly-activity": 1
   }
 }

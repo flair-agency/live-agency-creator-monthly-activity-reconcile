@@ -1,3 +1,4 @@
+import { validateRecordResult, validateApplyOutcome } from '@flair-agency/contracts/monthly-activity';
 import {
   validateRequest,
   assertSelection,
@@ -33,7 +34,7 @@ export async function reconcileMonthlyActivity({
   const snapshot = await source.readActivity(request);
   if (snapshot?.status === 'interaction-required') return snapshot;
 
-  const initial = await destination.readRecords(request);
+  const initial = validateRecordResult(await destination.readRecords(request));
   assertSelection(initial.selection, expectedSelection, mode === 'apply');
   const plan = buildPlan({ request, snapshot, records: initial.records, selection: initial.selection });
   if (plan.errors.length) {
@@ -59,14 +60,12 @@ export async function reconcileMonthlyActivity({
       outcome = { status: 'unknown' };
     }
   }
-  if (!['applied', 'unknown', 'conflict', 'rejected'].includes(outcome?.status)) {
-    throw new TypeError('invalid apply outcome');
-  }
+  validateApplyOutcome(outcome);
   if (['conflict', 'rejected'].includes(outcome.status)) {
     return { status: 'failed', ...summarize(plan, mode), writeOutcome: outcome.status, plan };
   }
 
-  const readback = await destination.readRecords(request);
+  const readback = validateRecordResult(await destination.readRecords(request));
   assertSelection(readback.selection, expectedSelection, true);
   const verified = buildPlan({ request, snapshot, records: readback.records, selection: readback.selection });
   if (verified.errors.length || verified.changes.length

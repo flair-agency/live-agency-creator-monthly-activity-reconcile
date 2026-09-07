@@ -1,7 +1,7 @@
 import {
   normalizeAccountKey,
   normalizeSnapshot,
-} from "./lark_activity_sync.mjs";
+} from "../src/contracts.js";
 import { createHash } from "node:crypto";
 
 const ACTIVITY_CAPABILITY = "creator-activity-source/v1";

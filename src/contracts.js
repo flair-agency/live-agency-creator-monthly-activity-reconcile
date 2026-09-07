@@ -1,9 +1,9 @@
-import { validateActivitySnapshot } from '@flair-agency/backstage-provider/contracts/activity';
-import { normalizeAccountKey, normalizeMonth } from '@flair-agency/lark-base-provider/contracts/creator-activity';
-export { validateActivitySnapshot } from '@flair-agency/backstage-provider/contracts/activity';
+import { validateActivitySnapshot } from '@flair-agency/contracts/monthly-activity';
+import { normalizeAccountKey, normalizeMonth } from '@flair-agency/contracts/monthly-activity';
+export { validateActivitySnapshot } from '@flair-agency/contracts/monthly-activity';
 export { normalizeAccountKey, normalizeMonth, METRIC_KEYS, canonical, validateRequest,
   validateSelection, assertSelection, validateMetrics, validateChanges
-} from '@flair-agency/lark-base-provider/contracts/creator-activity';
+} from '@flair-agency/contracts/monthly-activity';
 
 // Business normalization and the requested-month/calendar constraints stay here.
 function monthDays(month) {

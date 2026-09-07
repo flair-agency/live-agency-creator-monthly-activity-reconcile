@@ -1,4 +1,4 @@
 interface:
-  display_name: "Creator activity sync"
-  short_description: "Safely reconcile normalized monthly creator metrics to Lark"
-  default_prompt: "Use $creator-activity-sync to dry-run my normalized monthly creator activity metrics against Lark, then apply only if I explicitly requested an update."
+  display_name: "Monthly creator activity reconciliation"
+  short_description: "Reconcile normalized monthly creator activity with existing records"
+  default_prompt: "Use $live-agency-creator-monthly-activity-reconcile to compare monthly activity and apply only explicitly authorized changes."

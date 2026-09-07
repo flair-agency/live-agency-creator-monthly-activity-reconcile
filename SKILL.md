@@ -70,10 +70,3 @@ Report month, source update time/count, matched/change/unchanged counts,
 verification, and any missing, ambiguous, conflict, or uncertain result. Keep
 private configuration, credentials, source instructions, and audit data out of
 public output and Git.
-
-## Retained migration resources
-
-The `scripts/` entry points and [legacy destination configuration](references/lark-config.md)
-remain solely for regression and migration comparison. They are not the new
-consumer's public application route and do not supply Runtime selection or
-permission. Keep operational cutover separate from local implementation tests.

@@ -3,7 +3,6 @@ import test from 'node:test';
 import { reconcileMonthlyActivity } from '../src/application.js';
 import { buildPlan } from '../src/core.js';
 import { normalizeSnapshot } from '../src/contracts.js';
-import { buildPlan as legacyPlan, normalizeSnapshot as legacySnapshot } from '../scripts/lark_activity_sync.mjs';
 
 const selection = { readBinding: 'read', writeBinding: 'write', targetBinding: 'target' };
 const request = { month: '2030-01', accountKeys: ['creator.one', 'creator.two'] };
@@ -30,20 +29,13 @@ function fixture({ unknown = false, persist = true } = {}) {
 }
 const approval = plan => ({ mode: 'apply', approvedPlan: plan, authorization: { approved: true, selection } });
 
-test('same synthetic input has legacy plan, targets and metrics parity', async () => {
+test('dry run computes exact changes without writes', async () => {
   const value = fixture();
   const result = await reconcileMonthlyActivity(value.args);
-  const names = { month: 'month', account: 'account', diamonds: 'diamonds', effectiveLiveDays: 'days', liveMinutes: 'minutes' };
-  const bindings = Object.fromEntries(Object.entries(names).map(([key, name]) => [key, { name }]));
-  const records = value.records.map(row => ({ record_id: row.recordId, fields: {
-    month: '2030/01/01', account: row.accountKey, diamonds: row.metrics.diamonds,
-    days: row.metrics.effectiveLiveDays, minutes: row.metrics.liveMinutes,
-  } }));
-  const old = legacyPlan(records, legacySnapshot(snapshot), bindings);
-  assert.deepEqual(result.rows, old.rows);
-  assert.deepEqual(result.errors, old.errors);
-  assert.deepEqual(result.plan.changes.map(row => row.recordId), old.updates.map(row => row.record_id));
   assert.equal(result.changeCount, 1);
+  assert.deepEqual(result.plan.changes, [{ recordId: 'record_0', accountKey: 'creator.one',
+    current: { diamonds: 80, effectiveLiveDays: 2, liveMinutes: 90 },
+    desired: { diamonds: 100, effectiveLiveDays: 2, liveMinutes: 90 } }]);
   assert.equal(value.state.writes, 0);
 });
 
