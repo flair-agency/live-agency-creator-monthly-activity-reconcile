@@ -42,6 +42,26 @@ jobs:
           if (p.publishConfig?.registry !== 'https://npm.pkg.github.com') throw Error('registry missing');
           for (const group of ['dependencies', 'optionalDependencies', 'peerDependencies']) for (const v of Object.values(p[group] ?? {})) if (!exact(v)) throw Error('dependency must be exact');
           JS
+      - name: Check all private dependency access
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          const lock = JSON.parse(fs.readFileSync('package-lock.json'));
+          const names = [...new Set(Object.keys(lock.packages ?? {})
+            .filter(key => key.includes('node_modules/'))
+            .map(key => key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length))
+            .filter(name => name.startsWith('@flair-agency/')))];
+          const unavailable = [];
+          for (const name of names) {
+            const result = spawnSync('npm', ['view', name, 'version', '--json'], { encoding: 'utf8', timeout: 30000 });
+            if (result.status !== 0) unavailable.push({ name, code: result.stderr?.match(/E(?:401|403|404)/)?.[0] ?? 'lookup-failed' });
+          }
+          console.log(JSON.stringify({ checked: names, unavailable }, null, 2));
+          if (unavailable.length) process.exitCode = 1;
+          JS
       - run: npm ci --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -54,6 +74,35 @@ jobs:
           const [p] = JSON.parse(fs.readFileSync('packed.json'));
           for (const f of p.files) if (/(^|\/)(node_modules|tmp|\.git)(\/|$)/.test(f.path)) throw Error(`forbidden payload ${f.path}`);
           fs.writeFileSync('archive-name.txt', p.filename);
+          JS
+      - name: Verify installed archive before publication
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          import { execFileSync } from 'node:child_process';
+          const p = JSON.parse(fs.readFileSync('package.json'));
+          const archive = path.resolve(fs.readFileSync('archive-name.txt', 'utf8').trim());
+          const root = fs.mkdtempSync(path.join(os.tmpdir(), 'before-publish-'));
+          fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'archive-preflight', version: '1.0.0', private: true, dependencies: { [p.name]: `file:${archive}` } }));
+          execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: root, stdio: 'inherit' });
+          execFileSync('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: root, stdio: 'inherit' });
+          const directory = fs.realpathSync(path.join(root, 'node_modules', p.name));
+          const installed = JSON.parse(fs.readFileSync(path.join(directory, 'package.json')));
+          if (installed.name !== p.name || installed.version !== p.version) throw Error('archive identity differs');
+          const strings = value => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(strings) : [];
+          const entries = [...strings(installed.exports), ...strings(installed.bin)];
+          for (const b of installed.liveAgencyProvider?.bindings ?? []) entries.push(...strings(b.execution?.entry), ...strings(b.execution?.resource), ...strings(b.execution?.resources));
+          for (const entry of new Set(entries)) {
+            const file = path.resolve(directory, entry);
+            if (!file.startsWith(directory + path.sep) || !fs.statSync(file).isFile() || !fs.realpathSync(file).startsWith(directory + path.sep)) throw Error('archive resource escapes or is missing');
+          }
+          for (const entry of new Set(strings(installed.exports))) if (/\.(mjs|js|cjs)$/.test(entry)) await import(pathToFileURL(path.resolve(directory, entry)).href);
+          console.log('Inspected archive installs independently; declared resources and module imports passed.');
           JS
       - name: Check private package target
         env:
