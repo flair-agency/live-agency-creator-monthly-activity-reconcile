@@ -1,0 +1,102 @@
+# Owning repository and private publication were approved in the M1 source setup.
+# GitHub Packages initial visibility is Private (separate from npm private:true).
+# Do not set npm access:public or change visibility as part of publication.
+name: Verify published package
+concurrency:
+  group: verify-${{ github.repository }}
+  cancel-in-progress: false
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Reviewed source commit to verify
+        type: string
+        required: true
+permissions:
+  contents: read
+  packages: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: https://npm.pkg.github.com
+          scope: '@flair-agency'
+      - name: Validate owning repository and fixed dependencies
+        env:
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          ACTUAL_SHA: ${{ github.sha }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const p = JSON.parse(fs.readFileSync('package.json'));
+          if (process.env.EXPECTED_SHA !== process.env.ACTUAL_SHA) throw Error('reviewed commit mismatch');
+          const exact = v => /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(v);
+          const url = typeof p.repository === 'string' ? p.repository : p.repository?.url;
+          if (!p.name?.startsWith('@flair-agency/') || !exact(p.version) || p.private === true || p.workspaces) throw Error('invalid publish identity');
+          if (url !== `https://github.com/${process.env.EXPECTED_REPOSITORY}.git`) throw Error('owning source association missing');
+          if (p.publishConfig?.registry !== 'https://npm.pkg.github.com') throw Error('registry missing');
+          for (const group of ['dependencies', 'optionalDependencies', 'peerDependencies']) for (const v of Object.values(p[group] ?? {})) if (!exact(v)) throw Error('dependency must be exact');
+          JS
+      - name: Inspect actual archive
+        run: |
+          npm pack --ignore-scripts --json > packed.json
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const [p] = JSON.parse(fs.readFileSync('packed.json'));
+          for (const f of p.files) if (/(^|\/)(node_modules|tmp|\.git)(\/|$)/.test(f.path)) throw Error(`forbidden payload ${f.path}`);
+          fs.writeFileSync('archive-name.txt', p.filename);
+          JS
+      - name: Verify private registry installation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import { pathToFileURL } from 'node:url';
+          import path from 'node:path';
+          import { execFileSync } from 'node:child_process';
+          const p = JSON.parse(fs.readFileSync('package.json'));
+          const [packed] = JSON.parse(fs.readFileSync('packed.json'));
+          const npm = (args, cwd) => execFileSync('npm', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+          const published = JSON.parse(npm(['view', `${p.name}@${p.version}`, '--json'], process.cwd()));
+          if (published.dist.integrity !== packed.integrity) throw Error('published integrity differs from inspected archive');
+          const response = await fetch(`https://api.github.com/orgs/flair-agency/packages/npm/${encodeURIComponent(p.name.split('/')[1])}`, { headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json' } });
+          if (!response.ok) throw Error(`package readback failed (${response.status})`);
+          const metadata = await response.json();
+          if (metadata.visibility !== 'private' || metadata.owner?.login !== 'flair-agency' || metadata.name !== p.name.split('/')[1]) throw Error('package visibility or owner differs');
+          const repository = typeof published.repository === 'string' ? published.repository : published.repository?.url;
+          if (repository?.replace(/^git\+/, '') !== `https://github.com/${process.env.GITHUB_REPOSITORY}.git`) throw Error('published source declaration differs');
+          const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'installed-package-'));
+          fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ name: 'registry-install-check', version: '1.0.0', private: true, dependencies: { [p.name]: p.version } }));
+          npm(['install', '--ignore-scripts', '--no-audit', '--no-fund'], directory);
+          fs.rmSync(path.join(directory, 'node_modules'), { recursive: true });
+          npm(['ci', '--ignore-scripts', '--no-audit', '--no-fund'], directory);
+          const installed = JSON.parse(fs.readFileSync(path.join(directory, 'node_modules', p.name, 'package.json')));
+          if (installed.name !== p.name || installed.version !== p.version) throw Error('installed identity differs');
+          const packageRoot = path.join(directory, 'node_modules', p.name);
+          const exports = typeof installed.exports === 'string' ? [installed.exports] : Object.values(installed.exports ?? {});
+          let importedModules = 0;
+          for (const entry of exports) {
+            if (typeof entry !== 'string') throw Error('unsupported export shape');
+            const file = path.resolve(packageRoot, entry);
+            if (!file.startsWith(packageRoot + path.sep) || !fs.statSync(file).isFile()) throw Error('invalid installed export');
+            if (/\.(mjs|js)$/.test(file)) { await import(pathToFileURL(file).href); importedModules++; }
+          }
+          const receipt = { package: p.name, version: p.version, integrity: published.dist.integrity, visibility: metadata.visibility, declaredRepository: repository, verificationCommit: process.env.GITHUB_SHA, installedWithNpmCi: true, importedModules };
+          fs.writeFileSync('publication-receipt.json', JSON.stringify(receipt, null, 2));
+          fs.copyFileSync(path.join(directory, 'package-lock.json'), 'registry-install-lock.json');
+          console.log(JSON.stringify(receipt));
+          JS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: publication-evidence
+          path: |
+            publication-receipt.json
+            registry-install-lock.json
