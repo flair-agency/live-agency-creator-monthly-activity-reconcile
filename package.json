@@ -1,25 +1,30 @@
 {
-  "name": "@flair-agency/creator-activity-sync",
-  "version": "0.0.0",
+  "name": "@flair-agency/creator-monthly-activity-reconcile",
+  "version": "1.0.0",
   "type": "module",
   "license": "MIT",
   "exports": {
     "./SKILL.md": "./SKILL.md",
     "./scripts/lark_activity_sync": "./scripts/lark_activity_sync.mjs",
     "./scripts/resolve_activity_source": "./scripts/resolve_activity_source.mjs",
-    "./scripts/management_activity_input": "./scripts/management_activity_input.mjs"
+    "./scripts/management_activity_input": "./scripts/management_activity_input.mjs",
+    "./contracts": "./src/contracts.js",
+    "./core": "./src/core.js",
+    "./application": "./src/application.js",
+    "./legacy-activity": "./scripts/lark_activity_sync.mjs"
   },
   "files": [
     "SKILL.md",
     "scripts",
     "references",
     "agents",
-    "LICENSE"
+    "LICENSE",
+    "src"
   ],
   "dependencies": {
     "@flair-agency/cli-utils": "0.1.0",
-    "@flair-agency/source-provider-api": "1.6.0",
-    "@flair-agency/private-runtime-files": "1.0.0"
+    "@flair-agency/provider-protocol": "1.0.0",
+    "@flair-agency/private-files": "1.0.0"
   },
   "scripts": {
     "test": "node --test"

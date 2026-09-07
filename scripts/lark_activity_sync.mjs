@@ -5,8 +5,8 @@ import { isMainModule } from "@flair-agency/cli-utils/is-main";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { validateActivitySnapshot } from "@flair-agency/source-provider-api";
-import { readPrivateJson } from "@flair-agency/private-runtime-files";
+import { validateActivitySnapshot } from "../src/contracts.js";
+import { readPrivateJson } from "@flair-agency/private-files";
 
 const MAX_BATCH_SIZE = 200;
 const SELECTED_PROVIDER_VERSION = "creator-activity-selected-provider/v1";
